@@ -41,6 +41,31 @@
     }
   ]
 }
+[[test]] empty attribute block
+# Title {}
+[[ast]]
+{
+  "kind": "SourceFile",
+  "span": [0, 10],
+  "text": "# Title {}",
+  "children": [
+    {
+      "kind": "Heading",
+      "span": [0, 10],
+      "text": "# Title {}",
+      "level": 1,
+      "headingStyle": "Atx",
+      "attributes": "{}",
+      "children": [
+        {
+          "kind": "Text",
+          "span": [2, 10],
+          "text": "Title {}"
+        }
+      ]
+    }
+  ]
+}
 [[test]] setext heading ending with an attribute block
 Alpha
 beta {: key="a  {b}"}

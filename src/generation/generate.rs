@@ -905,6 +905,10 @@ fn gen_attribute_block<'a>(attributes: &HeadingAttributes<'a>, context: &Context
         items.push_space();
       }
     }
+    AttributeBlockPiece::Comma(start, end) => {
+      items.extend(ir_helpers::gen_from_raw_string(context.arena, &text[start..end]));
+      items.push_space();
+    }
     AttributeBlockPiece::End(_) => {}
   });
   debug_assert!(

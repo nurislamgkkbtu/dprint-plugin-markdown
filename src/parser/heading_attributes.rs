@@ -7,14 +7,14 @@
 //! `attr_list`:
 //!
 //! ```text
-//! block = "{" [":"] *SP attr *(1*SP attr) *SP "}"
+//! block = "{" *SP "}" / "{" [":"] *SP attr *(1*SP attr / *SP "," *SP attr) *SP "}"
 //! attr  = "#" name / "." name / name "=" value / name
 //! value = DQUOTE *dq-char DQUOTE / "'" *sq-char "'" / 1*char
 //! ```
 //!
-//! where `char` is anything but whitespace and `{}="'\`, `name` is one or more
-//! of them that doesn't start with `#`, `.` or `:`, and a quoted value runs to
-//! the next quote of its kind.
+//! where `char` is anything but whitespace and `{}="'\,`, `name` is one or
+//! more of them that doesn't start with `#`, `.` or `:`, and a quoted value
+//! runs to the next quote of its kind.
 
 #[cfg(test)]
 use super::ast::*;
@@ -70,6 +70,8 @@ pub enum BlockPiece {
   /// A run of spaces outside of a quoted value, given as the byte range it
   /// covers, which is written as one space.
   Spaces(usize, usize),
+  /// A comma separating attributes, given as the byte range it covers.
+  Comma(usize, usize),
   /// Where the block ends, which is just past its closing `}`.
   End(usize),
 }
@@ -85,15 +87,18 @@ pub fn read_block(text: &str, mut on_piece: impl FnMut(BlockPiece)) -> Option<()
     return None;
   }
   let mut position = 1;
-  if bytes.get(position) == Some(&b':') {
+  let has_colon = bytes.get(position) == Some(&b':');
+  if has_colon {
     position += 1;
   }
   on_piece(BlockPiece::Text(0, position));
 
   let mut attribute_count = 0;
+  let mut after_comma = false;
   loop {
     let spaces_end = position + text[position..].len() - text[position..].trim_start_matches(' ').len();
-    if spaces_end > position {
+    let spaces_before_comma = bytes.get(spaces_end) == Some(&b',');
+    if spaces_end > position && !spaces_before_comma {
       on_piece(BlockPiece::Spaces(position, spaces_end));
     }
     let had_spaces = spaces_end > position;
@@ -101,8 +106,7 @@ pub fn read_block(text: &str, mut on_piece: impl FnMut(BlockPiece)) -> Option<()
 
     match bytes.get(position) {
       Some(b'}') => {
-        // a block holds at least one attribute
-        if attribute_count == 0 {
+        if attribute_count == 0 && has_colon {
           return None;
         }
         on_piece(BlockPiece::Text(position, position + 1));
@@ -110,8 +114,21 @@ pub fn read_block(text: &str, mut on_piece: impl FnMut(BlockPiece)) -> Option<()
         return Some(());
       }
       None => return None,
-      // attributes are separated by spaces
-      Some(_) if attribute_count > 0 && !had_spaces => return None,
+      Some(b',') if attribute_count > 0 => {
+        let comma_start = position;
+        position += 1;
+        while bytes.get(position) == Some(&b' ') {
+          position += 1;
+        }
+        if position == text.len() || matches!(bytes.get(position), Some(b',') | Some(b'}')) {
+          return None;
+        }
+        on_piece(BlockPiece::Comma(comma_start, comma_start + 1));
+        after_comma = true;
+        continue;
+      }
+      // Attributes are separated by spaces or commas.
+      Some(_) if attribute_count > 0 && !had_spaces && !after_comma => return None,
       Some(_) => {}
     }
 
@@ -119,6 +136,7 @@ pub fn read_block(text: &str, mut on_piece: impl FnMut(BlockPiece)) -> Option<()
     on_piece(BlockPiece::Text(position, attribute_end));
     position = attribute_end;
     attribute_count += 1;
+    after_comma = false;
   }
 }
 
@@ -154,7 +172,7 @@ fn name_len(text: &str) -> Option<usize> {
 /// whitespace and the characters that have a meaning of their own in a block.
 fn chars_len(text: &str) -> usize {
   text
-    .find([' ', '\t', '\n', '\r', '{', '}', '=', '"', '\'', '\\'])
+    .find([' ', '\t', '\n', '\r', '{', '}', '=', '"', '\'', '\\', ','])
     .unwrap_or(text.len())
 }
 
@@ -169,6 +187,8 @@ mod test {
   #[test]
   fn reads_valid_blocks() {
     for text in [
+      "{}",
+      "{ }",
       "{#id}",
       "{.class}",
       "{key=value}",
@@ -180,6 +200,7 @@ mod test {
       "{  #id   .a  }",
       "{#id #id}",
       "{#ID1.class1, #ID2.class2}",
+      "{#ID1.class1,#ID2.class2}",
       "{t=\"*a*\"}",
       "{t=\"a\\\"}",
       "{t=\"\"}",
@@ -195,8 +216,6 @@ mod test {
   #[test]
   fn rejects_invalid_blocks() {
     for text in [
-      "{}",
-      "{ }",
       "{:}",
       "{::x}",
       "{#}",
@@ -215,6 +234,9 @@ mod test {
       "{a=\"b\"c}",
       "{=a}",
       "{a=b }c",
+      "{#id,}",
+      "{#id,,.class}",
+      "{,#id}",
       "{: }",
       "{ :#id}",
     ] {
@@ -254,6 +276,7 @@ mod test {
     attributes_of("# Title {#id}", "{#id}", "Title");
     attributes_of("# *a*   {#id .c} ##", "{#id .c}", "*a*");
     attributes_of("# Title ## {#id}", "{#id}", "Title ##");
+    attributes_of("# Title {}", "{}", "Title");
     attributes_of("Alpha\nbeta {.c}\n===", "{.c}", "Alpha\nbeta");
     attributes_of("> Alpha\n> beta {.c}\n> ---", "{.c}", "Alpha\n> beta");
     attributes_of("# Title   {a=\" {b   c=\"d}\"}", "{b   c=\"d}\"}", "Title   {a=\"");
@@ -268,7 +291,6 @@ mod test {
       "# Title\t{#id}",
       "# Title \t {#id}",
       "#    {#id}",
-      "# Title {}",
       "# Title {#id} text",
       "# Title {#id} {bad",
       "# Title `{#id` }",
@@ -325,6 +347,23 @@ mod test {
         BlockPiece::Spaces(18, 19),
         BlockPiece::Text(19, 20),
         BlockPiece::End(20),
+      ]
+    );
+  }
+
+  #[test]
+  fn separates_comma_delimited_attributes() {
+    let mut pieces = Vec::new();
+    read_block("{#id,.class}", |piece| pieces.push(piece)).unwrap();
+    assert_eq!(
+      pieces,
+      vec![
+        BlockPiece::Text(0, 1),
+        BlockPiece::Text(1, 4),
+        BlockPiece::Comma(4, 5),
+        BlockPiece::Text(5, 11),
+        BlockPiece::Text(11, 12),
+        BlockPiece::End(12),
       ]
     );
   }

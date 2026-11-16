@@ -41,11 +41,29 @@
 [expect]
 # {#id}
 
-!! should not recognize an empty block !!
-# Title {}
+!! should recognize an empty block !!
+# Title {  }
 
 [expect]
-# Title {}
+# Title { }
+
+!! should leave a trailing comma in an invalid block alone !!
+# Title {#id,}
+
+[expect]
+# Title {#id,}
+
+!! should separate comma-delimited attributes with a space !!
+# Title {#ID1.class1,#ID2.class2}
+
+[expect]
+# Title {#ID1.class1, #ID2.class2}
+
+!! should collapse whitespace around comma-delimited attributes !!
+# Title {#ID1.class1  ,   #ID2.class2}
+
+[expect]
+# Title {#ID1.class1, #ID2.class2}
 
 !! should not recognize a block whose brace is within a code span !!
 # Title `{#id` }
